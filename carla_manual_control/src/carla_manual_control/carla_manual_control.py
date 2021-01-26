@@ -31,10 +31,16 @@ from __future__ import print_function
 import datetime
 import math
 import numpy
+import utm
 
 import rospy
 import tf
 from std_msgs.msg import Bool
+from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Int16
+
+from geometry_msgs.msg import PoseStamped
+
 from sensor_msgs.msg import NavSatFix
 from sensor_msgs.msg import Image
 from carla_msgs.msg import CarlaCollisionEvent
@@ -147,10 +153,90 @@ class World(object):
 
 
 # ==============================================================================
-# -- KeyboardControl -----------------------------------------------------------
+# ------- artiv----- -----------------------------------------------------------
+# ==============================================================================
+class artiv_bridge(object):
+    def __init__(self, role_name, hud):
+        self.hud = hud
+        self.car_state = [0]*20
+        self.cmd_accel = 0
+        self.cmd_brake = 0
+        self.cmd_steer = 0
+        self.role_name = role_name
+
+        self.cmd_accel_sub = rospy.Subscriber("/dbw_cmd/Accel", Int16, self.accel_callback)
+        self.cmd_brake_sub = rospy.Subscriber("/dbw_cmd/Brake", Int16, self.brake_callback)
+        self.cmd_steer_sub = rospy.Subscriber("/dbw_cmd/Steer", Int16, self.steer_callback)
+        #self.cmd_gear_sub = rospy.Subscriber("/dbw_cmd/Gear", Int16, self.gear_callback)
+
+        self.state_sub = rospy.Subscriber("/Ioniq_info", Float32MultiArray, self.state_callback)
+
+
+        self.gnss_subscriber = rospy.Subscriber(
+            "/carla/{}/gnss/".format(self.role_name), NavSatFix, self.gnss_callback)
+        self.vehicle_status_subscriber = rospy.Subscriber(
+            "/carla/{}/vehicle_status".format(self.role_name),
+            CarlaEgoVehicleStatus, self.vehicle_status_callback)
+
+
+        self.utm_pub = rospy.Publisher("/utm_fix", PoseStamped, queue_size = 1)
+        self.ego_vehicle_pub = rospy.Publisher("/{}_info".format(self.role_name), Float32MultiArray, queue_size = 1)
+    def vehicle_status_callback(self, data):
+        v = data.velocity*3.6
+        msg = Float32MultiArray()
+        msg.data.append(v)
+        self.ego_vehicle_pub.publish(msg)
+
+    def gnss_callback(self, data):
+        utm_data = PoseStamped()
+        lon = data.longitude
+        lat = data.latitude
+        utm_temp = utm.from_latlon(lat, lon)
+        utm_data.pose.position.x = utm_temp[0]
+        utm_data.pose.position.y = utm_temp[1]
+        self.utm_pub.publish(utm_data)
+
+    def state_callback(self, data):
+        #print(self.car_state)
+        self.car_state = data.data
+
+    def accel_callback(self, data):
+        
+        temp = data.data
+        if temp<=0 or temp>3000:
+            #rospy.logwarn("Rogue input Accel")
+            self.cmd_accel = 0
+        else:
+            self.cmd_accel = float(temp - 800)/2200.0
+
+    def brake_callback(self, data):
+        temp = data.data
+        if temp<=0 or temp > 27000:
+            #rospy.logwarn("Rogue input Brake")
+            self.cmd_brake = 0
+        else:
+            self.cmd_brake = float(temp - 3500)/23500.0
+
+    def steer_callback(self, data):
+        temp = data.data
+        if temp<-540 or temp>540:
+            rospy.logwarn("Rogue input Steer")
+            self.cmd_steer = 0
+        else:
+            self.cmd_steer = float(temp)/540
+    def state_callback(self, data):
+        #print(self.car_state)
+        self.car_state = data.data
+        
+
+
+            
+# ==============================================================================
+# ------ MainControl -----------------------------------------------------------
 # ==============================================================================
 
-class KeyboardControl(object):
+
+class MainControl(object):
     """
     Handle input events
     """
@@ -158,15 +244,18 @@ class KeyboardControl(object):
     def __init__(self, role_name, hud):
         self.role_name = role_name
         self.hud = hud
-
+        self.car_state = []
         self._autopilot_enabled = False
         self._control = CarlaEgoVehicleControl()
         self._steer_cache = 0.0
 
+        self.control_flag = 0 # 0 : Keyboard Control, 1 : Artiv auto, 2 : Human Control
+        self.control_map = { 0 : "Keyboard Control", 1 : "ARTIV Auto", 2 : "Human Control"}
+
         self.vehicle_control_manual_override_publisher = rospy.Publisher(
             "/carla/{}/vehicle_control_manual_override".format(self.role_name),
             Bool, queue_size=1, latch=True)
-        self.vehicle_control_manual_override = False
+        self.vehicle_control_manual_override = True
         self.auto_pilot_enable_publisher = rospy.Publisher(
             "/carla/{}/enable_autopilot".format(self.role_name), Bool, queue_size=1)
         self.vehicle_control_publisher = rospy.Publisher(
@@ -175,22 +264,28 @@ class KeyboardControl(object):
         self.carla_status_subscriber = rospy.Subscriber(
             "/carla/status", CarlaStatus, self._on_new_carla_frame)
 
+
         self.set_autopilot(self._autopilot_enabled)
 
         self.set_vehicle_control_manual_override(
             self.vehicle_control_manual_override)  # disable manual override
+
+        self.artiv_bridge = artiv_bridge(role_name, hud)
 
     def __del__(self):
         self.auto_pilot_enable_publisher.unregister()
         self.vehicle_control_publisher.unregister()
         self.vehicle_control_manual_override_publisher.unregister()
 
+    def set_control_control_mode(self):
+        self.hud.notification("Set Vehicle {} mode".format(self.control_map[self.control_flag]))
+
     def set_vehicle_control_manual_override(self, enable):
         """
         Set the manual control override
         """
-        self.hud.notification('Set vehicle control manual override to: {}'.format(enable))
-        self.vehicle_control_manual_override_publisher.publish((Bool(data=enable)))
+        #self.hud.notification('Set vehicle control manual override to: {}'.format(enable))
+        self.vehicle_control_manual_override_publisher.publish((Bool(data=True)))
 
     def set_autopilot(self, enable):
         """
@@ -215,8 +310,15 @@ class KeyboardControl(object):
                                           pygame.key.get_mods() & KMOD_SHIFT):
                     self.hud.help.toggle()
                 elif event.key == K_b:
+                    self.control_flag+=1
+                    if self.control_flag>2:
+                        self.control_flag = 0
+                    self.set_control_control_mode()
+                    '''    
                     self.vehicle_control_manual_override = not self.vehicle_control_manual_override
+                    '''
                     self.set_vehicle_control_manual_override(self.vehicle_control_manual_override)
+                    
                 if event.key == K_q:
                     self._control.gear = 1 if self._control.reverse else -1
                 elif event.key == K_m:
@@ -228,13 +330,28 @@ class KeyboardControl(object):
                 elif self._control.manual_gear_shift and event.key == K_PERIOD:
                     self._control.gear = self._control.gear + 1
                 elif event.key == K_p:
-                    self._autopilot_enabled = not self._autopilot_enabled
+                    self._pautopilot_enabled = not self._autopilot_enabled
                     self.set_autopilot(self._autopilot_enabled)
                     self.hud.notification('Autopilot %s' % (
                         'On' if self._autopilot_enabled else 'Off'))
-        if not self._autopilot_enabled and self.vehicle_control_manual_override:
-            self._parse_vehicle_keys(pygame.key.get_pressed(), clock.get_time())
-            self._control.reverse = self._control.gear < 0
+        if not self._autopilot_enabled:
+            if self.control_flag == 0:
+                self._parse_vehicle_keys(pygame.key.get_pressed(), clock.get_time())
+                self._control.reverse = self._control.gear < 0
+            elif self.control_flag == 1:
+                self._artiv_auto_mode(pygame.key.get_pressed())
+                self._control.reverse = self._control.gear < 0
+            else:
+                self._sycro_car_mode(pygame.key.get_pressed())
+                self._control.reverse = self._control.gear < 0
+            '''
+            if self.vehicle_control_manual_override:
+                self._parse_vehicle_keys(pygame.key.get_pressed(), clock.get_time())
+                self._control.reverse = self._control.gear < 0
+            else:
+                self._sycro_car_mode(pygame.key.get_pressed())
+                self._control.reverse = self._control.gear < 0
+            '''
         return False
 
     def _on_new_carla_frame(self, _):
@@ -244,7 +361,7 @@ class KeyboardControl(object):
         As CARLA only processes one vehicle control command per tick,
         send the current from within here (once per frame)
         """
-        if not self._autopilot_enabled and self.vehicle_control_manual_override:
+        if not self._autopilot_enabled:
             try:
                 self.vehicle_control_publisher.publish(self._control)
             except rospy.ROSException as error:
@@ -252,7 +369,7 @@ class KeyboardControl(object):
 
     def _parse_vehicle_keys(self, keys, milliseconds):
         """
-        parse key events
+        parse key events, Key board Control
         """
         self._control.throttle = 1.0 if keys[K_UP] or keys[K_w] else 0.0
         steer_increment = 5e-4 * milliseconds
@@ -266,6 +383,24 @@ class KeyboardControl(object):
         self._control.steer = round(self._steer_cache, 1)
         self._control.brake = 1.0 if keys[K_DOWN] or keys[K_s] else 0.0
         self._control.hand_brake = keys[K_SPACE]
+
+    def _sycro_car_mode(self, keys):
+        """
+        Human Control
+        """
+        self._control.throttle = self.artiv_bridge.car_state[12]/255
+        self._steer_cache = min(1.0, max(-1.0, self.artiv_bridge.car_state[3]/540))
+        self._control.steer = self._steer_cache
+        self._control.brake = min(1, max(0,self.artiv_bridge.car_state[11]-5)/145)
+        self._control.hand_brake = keys[K_SPACE]    
+
+    def _artiv_auto_mode(self, keys):
+        print(self.artiv_bridge.cmd_brake)
+        self._control.throttle = self.artiv_bridge.cmd_accel
+        self._steer_cache = min(1.0, max(-1.0, self.artiv_bridge.cmd_steer))
+        self._control.steer = self._steer_cache
+        self._control.brake = self.artiv_bridge.cmd_brake
+        self._control.hand_brake = keys[K_SPACE]    
 
     @staticmethod
     def _is_quit_shortcut(key):
@@ -586,7 +721,7 @@ def main():
 
         hud = HUD(role_name, resolution['width'], resolution['height'])
         world = World(role_name, hud)
-        controller = KeyboardControl(role_name, hud)
+        controller = MainControl(role_name, hud)
 
         clock = pygame.time.Clock()
 

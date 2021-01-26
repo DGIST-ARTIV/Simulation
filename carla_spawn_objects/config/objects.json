@@ -22,7 +22,7 @@
             "id": "map"
         },
         {
-            "type": "vehicle.*",
+            "type": "vehicle.mustang.mustang",
             "id": "ego_vehicle",
             "sensors": 
             [
