@@ -330,7 +330,7 @@ class MainControl(object):
                 elif self._control.manual_gear_shift and event.key == K_PERIOD:
                     self._control.gear = self._control.gear + 1
                 elif event.key == K_p:
-                    self._pautopilot_enabled = not self._autopilot_enabled
+                    self._autopilot_enabled = not self._autopilot_enabled
                     self.set_autopilot(self._autopilot_enabled)
                     self.hud.notification('Autopilot %s' % (
                         'On' if self._autopilot_enabled else 'Off'))

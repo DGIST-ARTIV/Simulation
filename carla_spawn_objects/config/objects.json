@@ -22,7 +22,7 @@
             "id": "map"
         },
         {
-            "type": "vehicle.mustang.mustang",
+            "type": "vehicle.tesla.model3",
             "id": "ego_vehicle",
             "sensors": 
             [
@@ -54,14 +54,14 @@
                 {
                     "type": "sensor.lidar.ray_cast",
                     "id": "lidar",
-                    "spawn_point": {"x": 0.0, "y": 0.0, "z": 2.4, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
-                    "range": 50,
-                    "channels": 32,
-                    "points_per_second": 320000,
+                    "spawn_point": {"x": 2, "y": 0.0, "z": 0.83, "roll": 0.0, "pitch": 0.0, "yaw": 0.0},
+                    "range": 150,
+                    "channels": 64,
+                    "points_per_second": 640000,
                     "upper_fov": 2.0,
                     "lower_fov": -26.8,
                     "rotation_frequency": 20,
-                    "sensor_tick": 0.05,
+                    "sensor_tick": 0.1,
                     "noise_stddev": 0.0
                 },
                 {
