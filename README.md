@@ -5,5 +5,5 @@ DGIST ARTIV simulation repository
 
 현재는 더 나아가 HILs, VILs 시스템을 구성했다.
 
-## VILs DEME Video
+## VILs DEMO Video
 [![video](https://img.youtube.com/vi/SkeTawEqiRU/0.jpg)](https://youtu.be/SkeTawEqiRU)
